@@ -1,8 +1,17 @@
-from typing import Optional, Tuple
-from collections import namedtuple
 import datetime
-import httplib2
 import urllib.parse
+from collections import namedtuple
+from typing import Optional
+
+import httplib2
+
+"""
+Welcome to my PVOutput API for Python. This api is just useful for getting data from pvoutput.org and is not
+meant to send data to pvoutput.org. If you want to use this in your project, feel free to copy this file into
+your own project and keep this comment block
+
+retrodaredevil
+"""
 
 DayStatisticsStandard = namedtuple("DayStatisticsStandard",
                                    "energy_generation power_generation peak_power peak_power_time")
@@ -51,6 +60,7 @@ class PVOutput:
         self.__system_id = int(system_id)
         self.__api_key = "" + api_key
         self.__host = "" + host
+        self.debug = False
 
     def _send(self, method, path, params):
         h = httplib2.Http()
@@ -65,6 +75,8 @@ class PVOutput:
         if params:
             uri += "?" + urllib.parse.urlencode(params)
         (response, content) = h.request(uri=uri, method=method, headers=headers)
+        if self.debug:
+            print((response, content))
         return response, content.decode("utf-8")
 
     def get_status(self, date: datetime.date = None, time: datetime.time = None,
@@ -102,7 +114,7 @@ class PVOutput:
             raise PVOutputException(content)
         if day_statistics:
             split_content = [a.split(",") for a in content.split(";")]
-            standard_content = split_content[1]
+            standard_content = split_content[0]
             owner_content = None
             temperature_content = None
             if len(split_content) == 2:
