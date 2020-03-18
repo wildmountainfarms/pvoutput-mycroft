@@ -1,0 +1,25 @@
+{
+  "name": "PVOutput",
+  "color": "#1da5ec",
+  "skillMetadata": {
+    "sections": [
+      {
+        "name": "Configuration",
+        "fields": [
+          {
+            "type": "number",
+            "name": "system_id",
+            "value": -1,
+            "label": "System ID"
+          },
+          {
+            "type": "password",
+            "name": "api_key",
+            "value": "",
+            "label": "API Key"
+          }
+        ]
+      }
+    ]
+  }
+}
