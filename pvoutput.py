@@ -77,6 +77,11 @@ class UnauthorizedPVOutputException(PVOutputException):
         super().__init__(message)
 
 
+class InvalidApiKeyPVOutputException(UnauthorizedPVOutputException):
+    def __init__(self, message):
+        super().__init__(message)
+
+
 class PVOutput:
     def __init__(self, system_id: int, api_key: str, host: str = "https://pvoutput.org"):
         self.__system_id = int(system_id)
@@ -105,6 +110,8 @@ class PVOutput:
     def _check_response(response, content):
         status = int(response.status)
         if status == 401:
+            if "Invalid API Key" in content:
+                raise InvalidApiKeyPVOutputException(content)
             raise UnauthorizedPVOutputException(content)
         elif status != 200:
             if "No status found" in content:

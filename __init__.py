@@ -8,7 +8,8 @@ from mycroft.skills.core import MycroftSkill, intent_handler
 from mycroft.util.log import LOG
 from mycroft.util.parse import extract_datetime
 from mycroft.util.format import nice_date
-from .pvoutput import PVOutput, NoStatusPVOutputException, DayStatistics, NoOutputsPVOutputException
+from .pvoutput import PVOutput, NoStatusPVOutputException, DayStatistics, NoOutputsPVOutputException, \
+    InvalidApiKeyPVOutputException
 
 
 class PVOutputSkill(MycroftSkill):
@@ -103,6 +104,8 @@ class PVOutputSkill(MycroftSkill):
             function()
         except (NoStatusPVOutputException, NoOutputsPVOutputException):
             self.speak_dialog("no.status.for.date", {"date": date_string})
+        except InvalidApiKeyPVOutputException:
+            self.speak_dialog("invalid.api.key")
 
     def process_message_for_statistic(self, message, process_statistic):
         pvo = self.get_pvoutput()
