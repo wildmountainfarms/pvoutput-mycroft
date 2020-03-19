@@ -1,4 +1,4 @@
-## PVOutput
+## <img src='https://raw.githubusercontent.com/wildmountainfarms/pvoutput-mycroft/master/sun_and_panel_logo.png' width='50' style='vertical-align:bottom'/> PVOutput
 Informs you about energy generation and consumption
 
 ## Description 
