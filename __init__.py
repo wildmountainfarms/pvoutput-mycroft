@@ -4,7 +4,9 @@ from typing import Optional
 from adapt.intent import IntentBuilder
 from mycroft.skills.core import MycroftSkill, intent_handler
 from mycroft.util.log import LOG
-from .pvoutput import PVOutput
+from mycroft.util.parse import extract_datetime
+from mycroft.util.format import nice_date
+from .pvoutput import PVOutput, NoStatusPVOutputException
 
 
 class PVOutputSkill(MycroftSkill):
@@ -30,64 +32,104 @@ class PVOutputSkill(MycroftSkill):
         LOG.info("No pvoutput setup id: {}".format(system_id))
         return None
 
-    @intent_handler(IntentBuilder("Energy Generated Today").require("Energy").require("Generated").optionally("Today"))
-    def energy_generated_today(self, message):
+    def format_date(self, date: datetime.date):
+        today = datetime.date.today()
+        days = (today - date).days
+        if days == 0:  # today
+            return self.translate("today")
+        elif days == 1:  # yesterday
+            return self.translate("yesterday")
+        elif 2 <= days <= 6:
+            return self.translate("days.ago", data={"days": days})
+        elif days <= 200:
+            return ", ".join(nice_date(date).split(", ")[:2])  # the user doesn't care what the year is
+        return nice_date(date)
+
+    @staticmethod
+    def get_date(message, prefer_past_date=True):
+        result = extract_datetime(message.data.get("utterance", ""))
+        if result is None:
+            return datetime.date.today()
+        date = result[0].date()
+        if prefer_past_date:
+            today = datetime.date.today()
+            if (date - today).days > 30:  # date is pretty far in the future
+                return datetime.date(date.year - 1, date.month, date.day)
+        return date
+
+    def handle_errors(self, function, date):
+        try:
+            function()
+        except NoStatusPVOutputException:
+            self.speak_dialog("no.status.for.date",
+                              {"date": self.translate("today") if date is None else nice_date(date)})
+
+    @intent_handler(IntentBuilder("Energy Generated").require("Energy").require("Generated").optionally("Solar")
+                    .optionally("PVOutput"))
+    def energy_generated(self, message):
         pvo = self.get_pvoutput()
         if not pvo:
             return
-        generated_watt_hours = pvo.get_status().energy_generation
-        self.speak_dialog("energy.generated.today", data={"amount": generated_watt_hours / 1000.0})
+        date = self.get_date(message)
 
-    @intent_handler(IntentBuilder("Energy Generated Yesterday").require("Energy").require("Generated")
-                    .require("Yesterday"))
-    def energy_generated_yesterday(self, message):
+        def function():
+            generated_watt_hours = pvo.get_status(date=date).energy_generation
+            self.speak_dialog("energy.generated", data={"amount": generated_watt_hours / 1000.0,
+                                                        "date": self.format_date(date)})
+        self.handle_errors(function, date)
+
+    @intent_handler(IntentBuilder("Energy Used").require("Energy").require("Used").optionally("Solar")
+                    .optionally("PVOutput"))
+    def energy_used(self, message):
         pvo = self.get_pvoutput()
         if not pvo:
             return
-        generated_watt_hours = pvo.get_status(date=datetime.datetime.today().date() - datetime.timedelta(days=1)).energy_generation
-        self.speak_dialog("energy.generated.yesterday", data={"amount": generated_watt_hours / 1000.0})
+        date = self.get_date(message)
 
-    @intent_handler(IntentBuilder("Energy Used Today").require("Energy").require("Used").optionally("Today"))
-    def energy_used_today(self, message):
-        pvo = self.get_pvoutput()
-        if not pvo:
-            return
-        generated_watt_hours = pvo.get_status().energy_consumption
-        self.speak_dialog("energy.used.today", data={"amount": generated_watt_hours / 1000.0})
+        def function():
+            consumed_watt_hours = pvo.get_status(date=date).energy_consumption
+            self.speak_dialog("energy.used", data={"amount": consumed_watt_hours / 1000.0,
+                                                   "date": self.format_date(date)})
+        self.handle_errors(function, date)
 
-    @intent_handler(IntentBuilder("Energy Used Yesterday").require("Energy").require("Used").require("Yesterday"))
-    def energy_used_yesterday(self, message):
-        pvo = self.get_pvoutput()
-        if not pvo:
-            return
-        generated_watt_hours = pvo.get_status(date=datetime.datetime.today().date() - datetime.timedelta(days=1)).energy_consumption
-        self.speak_dialog("energy.used.yesterday", data={"amount": generated_watt_hours / 1000.0})
-
-    @intent_handler(IntentBuilder("Power Generating Now").require("Power").require("Generating").optionally("Now"))
+    @intent_handler(IntentBuilder("Power Generating Now").require("Power").require("Generating").optionally("Now")
+                    .optionally("Solar").optionally("PVOutput"))
     def power_generating_now(self, message):
         pvo = self.get_pvoutput()
         if not pvo:
             return
-        generating_watts = pvo.get_status().power_generation
-        self.speak_dialog("power.generating.now", data={"amount": generating_watts / 1000.0})
 
-    @intent_handler(IntentBuilder("Power Using Now").require("Power").require("Using").optionally("Now"))
+        def function():
+            generating_watts = pvo.get_status().power_generation
+            self.speak_dialog("power.generating.now", data={"amount": generating_watts / 1000.0})
+        self.handle_errors(function, None)
+
+    @intent_handler(IntentBuilder("Power Using Now").require("Power").require("Using").optionally("Now")
+                    .optionally("Solar").optionally("PVOutput"))
     def power_using_now(self, message):
         pvo = self.get_pvoutput()
         if not pvo:
             return
-        using_watts = pvo.get_status().power_consumption
-        self.speak_dialog("power.using.now", data={"amount": using_watts / 1000.0})
 
-    @intent_handler(IntentBuilder("Peak Power Today").require("PeakPower").optionally("Today"))
-    def peak_power_today(self, message):
+        def function():
+            using_watts = pvo.get_status().power_consumption
+            self.speak_dialog("power.using.now", data={"amount": using_watts / 1000.0})
+        self.handle_errors(function, None)
+
+    @intent_handler(IntentBuilder("Peak Power").require("PeakPower").optionally("Solar").optionally("PVOutput"))
+    def peak_power(self, message):
         pvo = self.get_pvoutput()
         if not pvo:
             return
-        status = pvo.get_status(day_statistics=True)
-        peak_power = status.standard.peak_power
-        time: datetime.time = status.standard.peak_power_time
-        self.speak_dialog("peak.power.today", data={"amount": peak_power / 1000.0, "time": self.time_to_str(time)})
+        date = self.get_date(message)
+
+        def function():
+            status = pvo.get_status(date=date, day_statistics=True)
+            peak_power = status.standard.peak_power
+            time: datetime.time = status.standard.peak_power_time
+            self.speak_dialog("peak.power", data={"amount": peak_power / 1000.0, "time": self.time_to_str(time),
+                                                  "date": self.format_date(date)})
+        self.handle_errors(function, date)
 
 
 def create_skill():

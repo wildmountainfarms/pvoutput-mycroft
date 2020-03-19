@@ -28,6 +28,13 @@ HistoryStatus = namedtuple("HistoryStatus", "date time energy_generation energy_
 GetStatus = namedtuple("GetStatus", "date time energy_generation power_generation energy_consumption power_consumption "
                                     "normalised_output temperature voltage extended_values")
 
+Statistic = namedtuple("Statistic",
+                       "energy_generated energy_exported average_generation minimum_generation maximum_generation "
+                       "average_efficiency outputs actual_date_from actual_date_to record_efficiency record_date "
+                       "energy_consumed peak_energy_import off_peak_energy_import shoulder_energy_import "
+                       "high_shoulder_energy_import average_consumption minimum_consumption maximum_consumption "
+                       "credit_amount debit_amount")
+
 
 def to_pvoutput_time(time: datetime.time):
     return time.strftime("%H:%M")
@@ -46,13 +53,18 @@ def from_pvoutput_date(date: str):
 
 
 class PVOutputException(Exception):
-    def __init__(self, *args, **kwargs):
-        super().__init__(args, kwargs)
+    def __init__(self, message):
+        super().__init__(message)
+
+
+class NoStatusPVOutputException(PVOutputException):
+    def __init__(self, message):
+        super().__init__(message)
 
 
 class UnauthorizedPVOutputException(PVOutputException):
-    def __init__(self, *args, **kwargs):
-        super().__init__(args, kwargs)
+    def __init__(self, message):
+        super().__init__(message)
 
 
 class PVOutput:
@@ -79,10 +91,21 @@ class PVOutput:
             print((response, content))
         return response, content.decode("utf-8")
 
-    def get_status(self, date: datetime.date = None, time: datetime.time = None,
-                   history: bool = False, ascending: bool = False, limit: int = None,
-                   time_from: datetime.time = None, time_to: datetime.time = None,
-                   extended_data: bool = False, system_id: Optional[bool] = None,
+    @staticmethod
+    def _check_response(response, content):
+        status = int(response.status)
+        if status == 401:
+            raise UnauthorizedPVOutputException(content)
+        elif status != 200:
+            if "No status found" in content:
+                raise NoStatusPVOutputException(content)
+
+            raise PVOutputException(content)
+
+    def get_status(self, date: Optional[datetime.date] = None, time: Optional[datetime.time] = None,
+                   history: bool = False, ascending: bool = False, limit: Optional[int] = None,
+                   time_from: Optional[datetime.time] = None, time_to: Optional[datetime.time] = None,
+                   extended_data: bool = False, system_id: Optional[int] = None,
                    day_statistics: bool = False):
         params = {}
         if date:
@@ -107,11 +130,7 @@ class PVOutput:
             params["stats"] = "1"
 
         (response, content) = self._send("GET", "service/r2/getstatus.jsp", params)
-        status = int(response.status)
-        if status == 401:
-            raise UnauthorizedPVOutputException(content)
-        elif status != 200:
-            raise PVOutputException(content)
+        self._check_response(response, content)
         if day_statistics:
             split_content = [a.split(",") for a in content.split(";")]
             standard_content = split_content[0]
@@ -173,4 +192,45 @@ class PVOutput:
                          None if temperature == "NaN" else float(temperature),
                          None if voltage == "NaN" else float(voltage), extended_values)
 
-    # TODO getstatistic.jsp
+    def get_statistic(self, date_from: datetime.date = None, date_to: datetime.date = None,
+                      consumption_and_import: bool = False, credits_debits: bool = False, system_id: int = None):
+        params = {}
+        if date_from:
+            params["df"] = to_pvoutput_date(date_from)
+        if date_to:
+            params["dt"] = to_pvoutput_date(date_to)
+        if consumption_and_import:
+            params["c"] = "1"
+        if credits_debits:
+            params["crdr"] = "1"
+        if system_id:
+            params["sid1"] = str(system_id)
+        (response, content) = self._send("GET", "service/r2/getstatistic.jsp", params)
+        self._check_response(response, content)
+        split = content.split(",")
+        standard = split[:11]
+        (energy_generated, energy_exported, average_generation, minimum_generation, maximum_generation,
+         average_efficiency, outputs, actual_date_from, actual_date_to, record_efficiency, record_date) = standard
+
+        extra = split[11:]
+
+        (energy_consumed, peak_energy_import, off_peak_energy_import, shoulder_energy_import,
+         high_shoulder_energy_import, average_consumption,
+         minimum_consumption, maximum_consumption) = extra[:8] if consumption_and_import else [None] * 8
+
+        (credit_amount, debit_amount) = extra[-2:] if credits_debits else [None] * 2
+
+        return Statistic(int(energy_generated), int(energy_exported), int(average_generation), int(minimum_generation),
+                         int(maximum_generation), float(average_efficiency), int(outputs),
+                         from_pvoutput_date(actual_date_from), from_pvoutput_date(actual_date_to),
+                         float(record_efficiency), from_pvoutput_date(record_date),
+                         None if energy_consumed is None else int(energy_consumed),
+                         None if peak_energy_import is None else int(peak_energy_import),
+                         None if off_peak_energy_import is None else int(off_peak_energy_import),
+                         None if shoulder_energy_import is None else int(shoulder_energy_import),
+                         None if high_shoulder_energy_import is None else int(high_shoulder_energy_import),
+                         None if average_consumption is None else int(average_consumption),
+                         None if minimum_consumption is None else int(minimum_consumption),
+                         None if maximum_consumption is None else int(maximum_consumption),
+                         None if credit_amount is None else float(credit_amount),
+                         None if debit_amount is None else float(debit_amount))
