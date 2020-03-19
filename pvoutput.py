@@ -1,7 +1,7 @@
 import datetime
 import urllib.parse
 from collections import namedtuple
-from typing import Optional
+from typing import Optional, List, Union
 
 import httplib2
 
@@ -57,7 +57,17 @@ class PVOutputException(Exception):
         super().__init__(message)
 
 
-class NoStatusPVOutputException(PVOutputException):
+class NoDataPVOutputException(PVOutputException):
+    def __init__(self, message):
+        super().__init__(message)
+
+
+class NoStatusPVOutputException(NoDataPVOutputException):
+    def __init__(self, message):
+        super().__init__(message)
+
+
+class NoOutputsPVOutputException(NoDataPVOutputException):
     def __init__(self, message):
         super().__init__(message)
 
@@ -99,6 +109,8 @@ class PVOutput:
         elif status != 200:
             if "No status found" in content:
                 raise NoStatusPVOutputException(content)
+            if "no outputs" in content:
+                raise NoOutputsPVOutputException(content)
 
             raise PVOutputException(content)
 
@@ -106,7 +118,7 @@ class PVOutput:
                    history: bool = False, ascending: bool = False, limit: Optional[int] = None,
                    time_from: Optional[datetime.time] = None, time_to: Optional[datetime.time] = None,
                    extended_data: bool = False, system_id: Optional[int] = None,
-                   day_statistics: bool = False):
+                   day_statistics: bool = False) -> Union[GetStatus, DayStatistics, List[HistoryStatus]]:
         params = {}
         if date:
             params["d"] = to_pvoutput_date(date)

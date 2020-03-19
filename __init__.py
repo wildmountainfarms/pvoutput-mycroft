@@ -1,12 +1,14 @@
 import datetime
+import calendar
 from typing import Optional
 
 from adapt.intent import IntentBuilder
+from mycroft import Message
 from mycroft.skills.core import MycroftSkill, intent_handler
 from mycroft.util.log import LOG
 from mycroft.util.parse import extract_datetime
 from mycroft.util.format import nice_date
-from .pvoutput import PVOutput, NoStatusPVOutputException
+from .pvoutput import PVOutput, NoStatusPVOutputException, DayStatistics, NoOutputsPVOutputException
 
 
 class PVOutputSkill(MycroftSkill):
@@ -32,65 +34,106 @@ class PVOutputSkill(MycroftSkill):
         LOG.info("No pvoutput setup id: {}".format(system_id))
         return None
 
-    def format_date(self, date: datetime.date):
-        today = datetime.date.today()
-        days = (today - date).days
-        if days == 0:  # today
-            return self.translate("today")
-        elif days == 1:  # yesterday
-            return self.translate("yesterday")
-        elif 2 <= days <= 6:
-            return self.translate("days.ago", data={"days": days})
-        elif days <= 200:
-            return ", ".join(nice_date(date).split(", ")[:2])  # the user doesn't care what the year is
-        return nice_date(date)
+    @staticmethod
+    def format_date(date: datetime.date):
+        return nice_date(datetime.datetime(date.year, date.month, date.day), now=datetime.datetime.now())
+
+    def nice_format_period(self, date1, date2):
+        if date1 == date2:
+            return self.format_date(date1)
+        return self.format_period(date1, date2)
+
+    def format_period(self, date1, date2):
+        return self.translate("between.dates", data={"date1": self.format_date(date1),
+                                                     "date2": self.format_date(date2)})
 
     @staticmethod
-    def get_date(message, prefer_past_date=True):
-        result = extract_datetime(message.data.get("utterance", ""))
+    def get_date(message):
+        utterance = message.data.get("utterance", "")
+        now = datetime.datetime.now()
+        today = now.date()
+        result = extract_datetime(utterance, anchorDate=now)
         if result is None:
-            return datetime.date.today()
+            return today
         date = result[0].date()
-        if prefer_past_date:
-            today = datetime.date.today()
-            if (date - today).days > 30:  # date is pretty far in the future
-                return datetime.date(date.year - 1, date.month, date.day)
+        if (date - today).days > 3:  # date is in the future
+            result = extract_datetime(utterance, anchorDate=(now - datetime.timedelta(days=365)))
+            date = result[0].date()
         return date
 
-    def handle_errors(self, function, date):
+    def get_this_week_start_date(self):
+        today = datetime.date.today()
+        weekday = (today.weekday() + 1) % 7  # TODO only add 1 if that's normal for someone's language/region
+        return today - datetime.timedelta(days=weekday)
+
+    def get_period(self, message: Message):
+        utterance = message.data.get("utterance", "")
+        today = datetime.date.today()
+        start = None
+        end = None
+        if self.voc_match(utterance, "LastMonth"):
+            if today.month == 1:
+                start = datetime.date(today.year - 1, 12, 1)
+            else:
+                start = datetime.date(today.year, today.month - 1, 1)
+            end = datetime.date(start.year, start.month, calendar.monthrange(start.year, start.month)[1])
+        elif self.voc_match(utterance, "ThisMonth"):
+            start = datetime.date(today.year, today.month, 1)
+            end = today
+        elif self.voc_match(utterance, "LastYear"):
+            start = datetime.date(today.year - 1, 1, 1)
+            end = datetime.date(today.year - 1, 12, 31)
+        elif self.voc_match(utterance, "ThisYear"):
+            start = datetime.date(today.year, 1, 1)
+            end = today
+        elif self.voc_match(utterance, "LastWeek"):
+            start = self.get_this_week_start_date() - datetime.timedelta(days=7)
+            end = start + datetime.timedelta(days=6)
+        elif self.voc_match(utterance, "ThisWeek"):
+            start = self.get_this_week_start_date()
+            end = start + datetime.timedelta(days=6)
+
+        if not start:
+            return None
+        return start, end
+
+    def handle_errors(self, function, date_string):
+        date_string = date_string or self.format_date(datetime.date.today())
         try:
             function()
-        except NoStatusPVOutputException:
-            self.speak_dialog("no.status.for.date",
-                              {"date": self.translate("today") if date is None else nice_date(date)})
+        except (NoStatusPVOutputException, NoOutputsPVOutputException):
+            self.speak_dialog("no.status.for.date", {"date": date_string})
+
+    def process_message_for_statistic(self, message, process_statistic):
+        pvo = self.get_pvoutput()
+        if not pvo:
+            return
+        period = self.get_period(message)
+        if not period:
+            date = self.get_date(message)
+            period = (date, date)
+
+        def period_function():
+            statistic = pvo.get_statistic(date_from=period[0], date_to=period[1], consumption_and_import=True)
+            date_string = self.nice_format_period(statistic.actual_date_from, statistic.actual_date_to)
+            process_statistic(statistic, date_string)
+        self.handle_errors(period_function, self.nice_format_period(period[0], period[1]))
 
     @intent_handler(IntentBuilder("Energy Generated").require("Energy").require("Generated").optionally("Solar")
                     .optionally("PVOutput"))
     def energy_generated(self, message):
-        pvo = self.get_pvoutput()
-        if not pvo:
-            return
-        date = self.get_date(message)
-
-        def function():
-            generated_watt_hours = pvo.get_status(date=date).energy_generation
-            self.speak_dialog("energy.generated", data={"amount": generated_watt_hours / 1000.0,
-                                                        "date": self.format_date(date)})
-        self.handle_errors(function, date)
+        def process_statistic(statistic, date_string):
+            generated_watt_hours = statistic.energy_generated
+            self.speak_dialog("energy.generated", data={"amount": generated_watt_hours / 1000.0, "date": date_string})
+        self.process_message_for_statistic(message, process_statistic)
 
     @intent_handler(IntentBuilder("Energy Used").require("Energy").require("Used").optionally("Solar")
                     .optionally("PVOutput"))
     def energy_used(self, message):
-        pvo = self.get_pvoutput()
-        if not pvo:
-            return
-        date = self.get_date(message)
-
-        def function():
-            consumed_watt_hours = pvo.get_status(date=date).energy_consumption
-            self.speak_dialog("energy.used", data={"amount": consumed_watt_hours / 1000.0,
-                                                   "date": self.format_date(date)})
-        self.handle_errors(function, date)
+        def process_statistic(statistic, date_string):
+            consumed_watt_hours = statistic.energy_consumed
+            self.speak_dialog("energy.used", data={"amount": consumed_watt_hours / 1000.0, "date": date_string})
+        self.process_message_for_statistic(message, process_statistic)
 
     @intent_handler(IntentBuilder("Power Generating Now").require("Power").require("Generating").optionally("Now")
                     .optionally("Solar").optionally("PVOutput"))
@@ -124,12 +167,12 @@ class PVOutputSkill(MycroftSkill):
         date = self.get_date(message)
 
         def function():
-            status = pvo.get_status(date=date, day_statistics=True)
+            status: DayStatistics = pvo.get_status(date=date, day_statistics=True)
             peak_power = status.standard.peak_power
             time: datetime.time = status.standard.peak_power_time
             self.speak_dialog("peak.power", data={"amount": peak_power / 1000.0, "time": self.time_to_str(time),
                                                   "date": self.format_date(date)})
-        self.handle_errors(function, date)
+        self.handle_errors(function, self.format_date(date))
 
 
 def create_skill():
