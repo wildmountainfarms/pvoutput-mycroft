@@ -1,4 +1,5 @@
 import datetime
+import pytz
 import calendar
 from typing import Optional
 
@@ -22,6 +23,10 @@ class PVOutputSkill(MycroftSkill):
     def use_24hour(self):
         return self.config_core.get('time_format') == 'full'
 
+    @property
+    def timezone(self):
+        return pytz.timezone(self.location_timezone)
+
     def time_to_str(self, time):
         if self.use_24hour:
             return time.strftime("%H:%M")
@@ -39,7 +44,7 @@ class PVOutputSkill(MycroftSkill):
 
     def format_date(self, date: datetime.date):
         return nice_date(datetime.datetime(date.year, date.month, date.day),
-                         now=datetime.datetime.now(tz=self.location_timezone))
+                         now=datetime.datetime.now(tz=self.timezone))
 
     def nice_format_period(self, date1, date2):
         if date1 == date2:
@@ -52,7 +57,7 @@ class PVOutputSkill(MycroftSkill):
 
     def get_date(self, message):
         utterance = message.data.get("utterance", "")
-        now = datetime.datetime.now(tz=self.location_timezone)
+        now = datetime.datetime.now(tz=self.timezone)
         today = now.date()
         result = extract_datetime(utterance, anchorDate=now)
         if result is None:
@@ -64,13 +69,13 @@ class PVOutputSkill(MycroftSkill):
         return date
 
     def get_this_week_start_date(self):
-        today = datetime.datetime.now(tz=self.location_timezone).date()
+        today = datetime.datetime.now(tz=self.timezone).date()
         weekday = (today.weekday() + 1) % 7  # TODO only add 1 if that's normal for someone's language/region
         return today - datetime.timedelta(days=weekday)
 
     def get_period(self, message: Message):
         utterance = message.data.get("utterance", "")
-        today = datetime.datetime.now(tz=self.location_timezone).date()
+        today = datetime.datetime.now(tz=self.timezone).date()
         start = None
         end = None
         if self.voc_match(utterance, "LastMonth"):
@@ -100,7 +105,7 @@ class PVOutputSkill(MycroftSkill):
         return start, end
 
     def handle_errors(self, function, date_string):
-        date_string = date_string or self.format_date(datetime.datetime.now(tz=self.location_timezone).date())
+        date_string = date_string or self.format_date(datetime.datetime.now(tz=self.timezone).date())
         try:
             function()
         except (NoStatusPVOutputException, NoOutputsPVOutputException) as e:
