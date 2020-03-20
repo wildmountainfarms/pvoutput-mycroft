@@ -15,6 +15,8 @@ from .pvoutput import PVOutput, NoStatusPVOutputException, DayStatistics, NoOutp
 class PVOutputSkill(MycroftSkill):
     def __init__(self):
         super().__init__(name="PVOutput")
+        # import httplib2
+        # httplib2.debuglevel = 1
 
     @property
     def use_24hour(self):
@@ -35,9 +37,9 @@ class PVOutputSkill(MycroftSkill):
         LOG.info("No pvoutput setup id: {}".format(system_id))
         return None
 
-    @staticmethod
-    def format_date(date: datetime.date):
-        return nice_date(datetime.datetime(date.year, date.month, date.day), now=datetime.datetime.now())
+    def format_date(self, date: datetime.date):
+        return nice_date(datetime.datetime(date.year, date.month, date.day),
+                         now=datetime.datetime.now(tz=self.location_timezone))
 
     def nice_format_period(self, date1, date2):
         if date1 == date2:
@@ -48,10 +50,9 @@ class PVOutputSkill(MycroftSkill):
         return self.translate("between.dates", data={"date1": self.format_date(date1),
                                                      "date2": self.format_date(date2)})
 
-    @staticmethod
-    def get_date(message):
+    def get_date(self, message):
         utterance = message.data.get("utterance", "")
-        now = datetime.datetime.now()
+        now = datetime.datetime.now(tz=self.location_timezone)
         today = now.date()
         result = extract_datetime(utterance, anchorDate=now)
         if result is None:
@@ -63,13 +64,13 @@ class PVOutputSkill(MycroftSkill):
         return date
 
     def get_this_week_start_date(self):
-        today = datetime.date.today()
+        today = datetime.datetime.now(tz=self.location_timezone).date()
         weekday = (today.weekday() + 1) % 7  # TODO only add 1 if that's normal for someone's language/region
         return today - datetime.timedelta(days=weekday)
 
     def get_period(self, message: Message):
         utterance = message.data.get("utterance", "")
-        today = datetime.date.today()
+        today = datetime.datetime.now(tz=self.location_timezone).date()
         start = None
         end = None
         if self.voc_match(utterance, "LastMonth"):
@@ -99,15 +100,17 @@ class PVOutputSkill(MycroftSkill):
         return start, end
 
     def handle_errors(self, function, date_string):
-        date_string = date_string or self.format_date(datetime.date.today())
+        date_string = date_string or self.format_date(datetime.datetime.now(tz=self.location_timezone).date())
         try:
             function()
-        except (NoStatusPVOutputException, NoOutputsPVOutputException):
+        except (NoStatusPVOutputException, NoOutputsPVOutputException) as e:
+            LOG.info(e)
             self.speak_dialog("no.status.for.date", {"date": date_string})
-        except InvalidApiKeyPVOutputException:
+        except InvalidApiKeyPVOutputException as e:
+            LOG.info(e)
             self.speak_dialog("invalid.api.key")
 
-    def process_message_for_statistic(self, message, process_statistic):
+    def process_message_for_statistic(self, message, process_statistic, consumption_and_import=False):
         pvo = self.get_pvoutput()
         if not pvo:
             return
@@ -117,7 +120,8 @@ class PVOutputSkill(MycroftSkill):
             period = (date, date)
 
         def period_function():
-            statistic = pvo.get_statistic(date_from=period[0], date_to=period[1], consumption_and_import=True)
+            statistic = pvo.get_statistic(date_from=period[0], date_to=period[1],
+                                          consumption_and_import=consumption_and_import)
             date_string = self.nice_format_period(statistic.actual_date_from, statistic.actual_date_to)
             process_statistic(statistic, date_string)
         self.handle_errors(period_function, self.nice_format_period(period[0], period[1]))
@@ -136,7 +140,7 @@ class PVOutputSkill(MycroftSkill):
         def process_statistic(statistic, date_string):
             consumed_watt_hours = statistic.energy_consumed
             self.speak_dialog("energy.used", data={"amount": consumed_watt_hours / 1000.0, "date": date_string})
-        self.process_message_for_statistic(message, process_statistic)
+        self.process_message_for_statistic(message, process_statistic, consumption_and_import=True)
 
     @intent_handler(IntentBuilder("Power Generating Now").require("Power").require("Generating").optionally("Now")
                     .optionally("Solar").optionally("PVOutput"))

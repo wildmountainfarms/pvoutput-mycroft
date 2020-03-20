@@ -19,7 +19,7 @@ This requires you to set up an account on https://pvoutput.org to get an API key
 * "How much energy have I used this year?"
 * "How much power am I using right now?"
 * "How much power are the solar panels generating?"
-* "What was my peak power today?"
+* "What was my peak power?"
 
 ## Credits 
 Joshua Shannon (@retrodaredevil)
