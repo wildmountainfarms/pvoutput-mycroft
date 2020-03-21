@@ -94,7 +94,7 @@ class PVOutput:
         # httplib2.debuglevel = 1
         headers = {
             "Content-type": "application/x-www-form-urlencoded",
-            "cache-control": "no-cache",
+            "Cache-Control": "no-store",
             "Accept": "text/plain",
             "X-Pvoutput-Apikey": self.__api_key,
             "X-Pvoutput-SystemId": str(self.__system_id)

@@ -25,7 +25,10 @@ class PVOutputSkill(MycroftSkill):
 
     @property
     def timezone(self):
-        return pytz.timezone(self.location_timezone)
+        timezone = self.location_timezone
+        if not timezone:
+            return None
+        return pytz.timezone(timezone)
 
     def time_to_str(self, time):
         if self.use_24hour:
